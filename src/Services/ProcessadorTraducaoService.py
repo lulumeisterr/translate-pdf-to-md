@@ -1,14 +1,15 @@
 import gc
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
+from src.Services.MarkdownEnhancer import GenericMarkdownEnhancer
 from src.Utils.TextCleaner import TextCleaner
 
 class ProcessadorTraducaoService:
 
-    def __init__(self, traducao_service, refinador_service, arquivo_saida="traducao_final.md"):
-        self.traducao_service = traducao_service
+    def __init__(self, argo_translate_service, refinador_service, arquivo_saida="traducao_final.md"):
+        self.argo_translate_service = argo_translate_service
         self.refinador_service = refinador_service
         self.arquivo_saida = arquivo_saida
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -32,9 +33,12 @@ class ProcessadorTraducaoService:
             for pagina_original in gerador_paginas:
                 p_num = pagina_original['numero_pagina']
                 
+                conteudo_limpo = TextCleaner.limpar_extração_pdf(pagina_original['conteudo'])
+                pagina_original['conteudo'] = conteudo_limpo
+
                 self.logger.info(f"⏳ [Pág {p_num}] Traduzindo base (Argos)...")
                 
-                pagina_traduzida = self.traducao_service.traduzir_pagina(pagina_original)
+                pagina_traduzida = self.argo_translate_service.traduzir_pagina(pagina_original)
                 
                 self.logger.info(f"🧠 [Pág {p_num}] Enviando para refinamento LLM (GPU)...")
                 fut = executor.submit(self._refinar_e_gravar, pagina_traduzida, pagina_original['conteudo'])
@@ -62,36 +66,66 @@ class ProcessadorTraducaoService:
                 concurrent.futures.wait(futures)
             
         self.logger.info("✨ Processamento completo! Arquivo gerado com sucesso.")
+        self.finalizar_processamento()
 
     def _refinar_e_gravar(self, pagina_traduzida, original):
         try:
             p_num = pagina_traduzida['pagina']
+            tipo = pagina_traduzida.get('tipo_conteudo', 'TEXTO_TECNICO')
+            
+            if pagina_traduzida.get('ignorar'):
+                self.logger.warning(f"⚠️ [Pág {p_num}] Descartada por filtros de ruído.")
+                return
+
+            conteudo_base_argos = pagina_traduzida['traduzido']
             conteudo_final = ""
 
-            # Lógica de Bypass
-            if TextCleaner.precisa_refinamento_llm(original):
-                self.logger.info(f"Página {p_num}: Sumário detectado. Ignorando LLM.")
-                conteudo_final = pagina_traduzida['traduzido']
-            else:
-                self.logger.info(f"Refinando Página {p_num} (GPU)...")
-                with self.llm_lock:
-                    conteudo_final = self.refinador_service.refinar_traducao(original, pagina_traduzida['traduzido'])
+            # LÓGICA DE REFINAMENTO POR TIPO
+            with self.llm_lock:
+                if tipo == "SUMARIO":
+                    self.logger.info(f"📊 [Pág {p_num}] Reestruturando hierarquia do Sumário...")
+                    conteudo_final = self.refinador_service.reestruturar_sumario(conteudo_base_argos)
+                
+                elif tipo == "CODIGO":
+                    self.logger.info(f"💻 [Pág {p_num}] Código detectado. Preservando original.")
+                    conteudo_final = f"```\n{original}\n```"
+                
+                else:
+                    self.logger.info(f"🧠 [Pág {p_num}] Refinando tradução técnica...")
+                    refinado = self.refinador_service.refinar_traducao(original, conteudo_base_argos)
+                    
+                    # Validação de Confiabilidade (apenas para texto comum)
+                    if TextCleaner.calcular_confiabilidade(original, refinado):
+                        conteudo_final = refinado
+                    else:
+                        self.logger.warning(f"⚠️ [Pág {p_num}] Refinamento instável. Usando base Argos.")
+                        conteudo_final = conteudo_base_argos
 
-            # Escrita no arquivo (Anexando)
+            # Escrita no arquivo (Thread-safe)
             with self.file_lock:
                 with open(self.arquivo_saida, "a", encoding="utf-8") as f:
                     f.write(f'\n## Página {p_num} <a id="pg{p_num}"></a>\n\n')
                     f.write(f"{conteudo_final}\n\n")
-                    f.write(f'[↑ Voltar ao topo](#Sumario)\n') # Link em MD puro
+                    f.write(f'[↑ Voltar ao topo](#Sumario)\n')
                     f.write("\n---\n")
                     f.flush()
 
-            # --- LIMPEZA AGRESSIVA ---
-            # Removemos referências a strings gigantescas imediatamente
+            # --- LIMPEZA DE MEMÓRIA ---
             pagina_traduzida['traduzido'] = ""
             del conteudo_final
             del original
-            gc.collect() # Avisa o Python para limpar o lixo da RAM
+            gc.collect()
 
         except Exception as e:
-            self.logger.error(f"Falha crítica na Página {p_num}: {e}")
+            self.logger.error(f"❌ Falha crítica na Página {p_num}: {e}")
+
+    def finalizar_processamento(self):
+        self.logger.info("📦 Consolidando arquivos e gerando HTML...")
+        caminho_md = self.arquivo_saida 
+        caminho_html = caminho_md.replace('.md', '.html')
+        try:
+            enhancer = GenericMarkdownEnhancer(caminho_md)
+            enhancer.process_and_view(caminho_html)
+            self.logger.info(f"✨ Pronto! Link de leitura: {caminho_html}")
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao gerar o HTML final: {e}")

@@ -9,30 +9,35 @@ class ExtrairDadosPdfService:
 
     def extract_text_from_pdf(self, file_path, start_page=0, end_page=None):
         doc = pymupdf.open(file_path)
-        self.logger.info(f"PDF aberto. Total de páginas: {len(doc)}")
         total_paginas = len(doc)
+        self.logger.info(f"📚 PDF aberto: {file_path} | Total: {total_paginas} pgs")
         
-        # Validação do intervalo de páginas
         if end_page is None or end_page > total_paginas:
             end_page = total_paginas
             
-        # Itera apenas no range solicitado
         for page_num in range(start_page, end_page):
+            p_num_display = page_num + 1
+            self.logger.info(f"📑 [Pág {p_num_display}] Extraindo blocos de texto...")
+
             page = doc.load_page(page_num)
             
-            # Usar "blocks" em vez de "text" ajuda a identificar parágrafos 
-            # e evita que o texto venha todo bagunçado em colunas.
+            # "blocks" preserva melhor a estrutura de parágrafos do livro
             blocos = page.get_text("blocks")
             
-            # Limpeza básica: remove blocos muito curtos (geralmente números de página)
-            texto_limpo = "\n".join([b[4] for b in blocos if len(b[4].strip()) > 10])
+            # Pegamos o texto bruto de todos os blocos sem filtros agressivos aqui
+            # b[4] é o conteúdo de texto do bloco no PyMuPDF
+            texto_bruto = "\n".join([b[4] for b in blocos]).strip()
 
-            if TextCleaner.precisa_refinamento_llm(texto_limpo):
-                continue
-            texto_processado = TextCleaner.limpar_extração_pdf(texto_limpo)
+            if not texto_bruto:
+                self.logger.warning(f"⚠️ [Pág {p_num_display}] Nenhum texto encontrado (página pode ser uma imagem/diagrama).")
+            else:
+                self.logger.info(f"✅ [Pág {p_num_display}] Extração concluída ({len(texto_bruto)} caracteres).")
 
+            # Entrega o conteúdo bruto para que os serviços seguintes decidam o que fazer
             yield {
-                "numero_pagina": page_num + 1,
-                "conteudo": texto_processado
+                "numero_pagina": p_num_display,
+                "conteudo": texto_bruto
             }
+            
         doc.close()
+        self.logger.info("🏁 Fluxo de extração finalizado.")

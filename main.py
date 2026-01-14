@@ -27,7 +27,7 @@ def main():
     logger = logging.getLogger("Main")
 
     # 1. Setup de Dependências
-    caminho_pdf = "E:\\Books\\97-things-every-software-architect-should-know.pdf"
+    caminho_pdf = "E:\\Books\\Book-2Designing-data-intensive-applications.pdf"
     caminho_llm = "E:\\Projetos\\Models\\Meta-Llama-3.1-8B-Instruct-Q4_K_L.gguf"
     traducao_base = TraducaoArgosPdfService(from_code="en", to_code="pt")
     refinador = RefinadorService(caminho_llm)

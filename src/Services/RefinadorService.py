@@ -28,27 +28,53 @@ class RefinadorService:
         """
         # Formato de Prompt específico do Phi-3
         prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-        Você é um Revisor Técnico Bilíngue. Sua tarefa é comparar a TRADUÇÃO ATUAL com o TEXTO ORIGINAL.
+                    Você é um Revisor Técnico Bilíngue especialista em livros de TI e Gestão.
+                    Sua tarefa é refinar a TRADUÇÃO ATUAL baseando-se no TEXTO ORIGINAL.
 
-        Diretrizes:
-        1. Identifique inconsistências de significado: Se a tradução mudou o conceito técnico, corrija-a.
-        2. O texto traduzido deve manter o conceito técnico do original, corrigindo inconsistências.
-        3. A tradução sempre ve ser realizada para português brasileiro (PT-BR).
-        4. Melhore a sintaxe: Ajuste frases que pareçam "tradução literal do Google" para um português técnico natural.
-        5. Verifique a terminologia: Garanta que termos como 'Architect', 'Design' e 'Stakeholders' estejam usados de forma consistente.
-        6. Se a tradução já estiver correta e fiel ao original, retorne-a exatamente como está.
-        7. Responda APENAS com o texto final adequado, sem comentários explicativos.<|eot_id|>
-        <|start_header_id|>user<|end_header_id|>
-        TEXTO ORIGINAL: {texto_original}
-        TRADUÇÃO ATUAL: {texto_traduzido}<|eot_id|>
-        <|start_header_id|>assistant<|end_header_id|>"""
+                    REGRAS CRÍTICAS:
+                    1. TÍTULO: Se esta página inicia um NOVO capítulo ou seção importante, comece com '### Título'. Se for continuação de um texto anterior, NÃO repita o título.
+                    2. TERMINOLOGIA: Mantenha termos técnicos de mercado (ex: Stakeholders, Pipeline, Design Patterns) se a tradução soar artificial, mas garanta que o contexto seja PT-BR.
+                    3. FLUIDEZ: Remova vícios de tradução literal (ex: "fazer sentido" em vez de "make sense").
+                    4. RESPOSTA: Retorne APENAS o texto revisado. Não explique suas alterações.<|eot_id|>
+                    <|start_header_id|>user<|end_header_id|>
+                    TEXTO ORIGINAL: {texto_original}
+                    TRADUÇÃO ATUAL: {texto_traduzido}<|eot_id|>
+                    <|start_header_id|>assistant<|end_header_id|>"""
 
         response = self.llm(
             prompt,
             max_tokens=len(texto_traduzido) + 200, # Permite expansão leve
-            temperature=0.04, # Baixa para evitar que a IA invente coisas
+            temperature=0.2, # Baixa para evitar que a IA invente coisas
             top_p=0.9,
-            repeat_penalty=1.2,
-            stop=["<|eot_id|>", "<|end_of_text|>"]
+            repeat_penalty=1.3,
+            stop=["<|eot_id|>", "<|end_of_text|>", "TEXTO ORIGINAL:", "TRADUÇÃO ATUAL:"]
         )
-        return response["choices"][0]["text"].strip()
+        texto_final = response["choices"][0]["text"].strip()
+        # Limpeza de segurança: Caso o LLM repita o sistema de headers
+        texto_final = texto_final.replace("<|start_header_id|>assistant<|end_header_id|>", "")
+        return texto_final
+    
+    def reestruturar_sumario(self, texto_sumario):
+        prompt = f"""<|start_header_id|>system<|end_header_id|>
+        Você é um assistente especializado em estruturação de documentos.
+        Sua tarefa é converter um texto de SUMÁRIO extraído de um PDF em uma lista Markdown organizada.
+
+        REGRAS:
+        1. Use '*' para itens principais e indentação (4 espaços) para sub-itens.
+        2. Remova pontos excessivos (ex: .........).
+        3. Preserve os números das páginas à direita.
+        4. Traduza os títulos para o Português, mantendo a terminologia técnica de TI.
+        5. Retorne APENAS o Markdown da lista.<|eot_id|>
+        <|start_header_id|>user<|end_header_id|>
+        TEXTO DO SUMÁRIO:
+        {texto_sumario}<|eot_id|>
+        <|start_header_id|>assistant<|end_header_id|>"""
+                
+        resposta_completa = self.llm(prompt, max_tokens=2048, stop=["<|eot_id|>"])
+        
+        if isinstance(resposta_completa, dict):
+            texto_final = resposta_completa['choices'][0]['text']
+        else:
+            texto_final = str(resposta_completa)
+            
+        return texto_final.strip()
